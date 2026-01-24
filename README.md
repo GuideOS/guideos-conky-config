@@ -210,4 +210,3 @@ Contributions are welcome! Please ensure any pull requests maintain compatibilit
 ## Support
 
 [Linuxguides-Community](https://forum.linuxguides.de/index.php?board/47-guideos/)
-
