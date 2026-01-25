@@ -1,0 +1,1159 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+GuideOS Conky Configurator
+Ein GTK4/Libadwaita GUI-Tool zum Erstellen und Anpassen von Conky-Konfigurationen
+"""
+
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+from gi.repository import Gtk, Adw, Gio, GLib, Gdk
+import os
+import sys
+import subprocess
+import json
+import shutil
+import re
+from pathlib import Path
+
+class SystemInfo:
+    """Definiert verfügbare Systeminformationen aus hwinfo.py und check-update.py"""
+
+    AVAILABLE_INFOS = [
+        {"id": "hostname", "label": "Hostname", "icon": "", "script": None, "var": "${nodename}", "interval": 0},
+        {"id": "kernel", "label": "Kernel", "icon": "󰌽", "script": None, "var": "${kernel}", "interval": 0},
+        {"id": "uptime", "label": "Laufzeit", "icon": "󰞌", "script": None, "var": "${uptime_short}", "interval": 0},
+        {"id": "updates", "label": "Updates", "icon": "󰚰", "script": "check-update.py", "var": None, "interval": 900},
+        {"id": "cpu", "label": "CPU", "icon": "󰻠", "script": "hwinfo.py cpu", "var": None, "interval": 21600},
+        {"id": "ram", "label": "RAM", "icon": "󰘚", "script": "hwinfo.py ram", "var": None, "interval": 10},
+        {"id": "gpu", "label": "GPU", "icon": "󰍹", "script": "hwinfo.py gpu", "var": None, "interval": 21600},
+        {"id": "gpu_driver", "label": "GPU Treiber", "icon": "󰒓", "script": "hwinfo.py gpu_driver", "var": None, "interval": 21600},
+        {"id": "gpu_memory", "label": "GPU Speicher", "icon": "󰘚", "script": "hwinfo.py gpu_memory", "var": None, "interval": 21600},
+        {"id": "network", "label": "Netzwerk", "icon": "󰛳", "script": "hwinfo.py net", "var": None, "interval": 10},
+        {"id": "disk", "label": "Disk(s)", "icon": "󰋊", "script": "hwinfo.py disk", "var": None, "interval": 10},
+    ]
+
+class ConkyConfig:
+    """Speichert die Conky-Konfiguration"""
+
+    def __init__(self):
+        self.font_family = "UbuntuMono Nerd Font"
+        self.font_style_small = "Regular"
+        self.font_style_medium = "Regular"
+        self.font_style_large = "Regular"
+        self.font_size_small = 10
+        self.font_size_medium = 12
+        self.font_size_large = 16
+        self.text_color = "#DCDCDC"
+        self.accent_color = "#0072b5"
+        self.bg_color = "#696969"
+        self.bg_transparent = False
+        self.bg_alpha = 100
+        self.alignment = "top_right"
+        self.gap_x = 45
+        self.gap_y = 65
+        self.monitor = 0
+        self.autostart = False
+        self.logo_padding_x = 8
+        self.logo_padding_y = 10
+        self.text_offset = 1
+        self.line_spacing = 1
+        self.enabled_infos = []
+        self.info_intervals = {}
+        self.separator_counter = 0
+        self.logo_file = "/usr/lib/guideos-conky/images/guideos.png"
+        self.logo_size = 40
+
+        loaded = self.load_existing_config()
+
+        if not loaded:
+            for info in SystemInfo.AVAILABLE_INFOS:
+                self.enabled_infos.append(info["id"])
+                self.info_intervals[info["id"]] = info["interval"]
+
+    def load_existing_config(self):
+        """Lädt eine existierende GuideOS.lua aus ~/.conky"""
+        config_file = Path.home() / ".conky" / "GuideOS.lua"
+        if not config_file.exists():
+            return False
+
+        try:
+            with open(config_file, 'r') as f:
+                content = f.read()
+
+            if 'font = ' in content:
+                match = re.search(r"font = '([^']+):style=([^:]+):size=(\d+)'", content)
+                if match:
+                    self.font_family = match.group(1)
+                    self.font_style_small = match.group(2)
+                    self.font_size_small = int(match.group(3))
+
+            if 'default_color = ' in content:
+                match = re.search(r"default_color = '([^']+)'", content)
+                if match:
+                    self.text_color = match.group(1)
+
+            if 'color2 = ' in content:
+                match = re.search(r"color2 = '([^']+)'", content)
+                if match:
+                    self.accent_color = match.group(1)
+
+            if 'own_window_colour = ' in content:
+                match = re.search(r"own_window_colour = '([^']+)'", content)
+                if match:
+                    self.bg_color = match.group(1)
+
+            if 'own_window_transparent = ' in content:
+                match = re.search(r"own_window_transparent = (true|false)", content)
+                if match:
+                    self.bg_transparent = match.group(1) == 'true'
+
+            if 'own_window_argb_value = ' in content:
+                match = re.search(r"own_window_argb_value = (\d+)", content)
+                if match:
+                    self.bg_alpha = int(match.group(1))
+
+            if 'alignment = ' in content:
+                match = re.search(r"alignment = '([^']+)'", content)
+                if match:
+                    self.alignment = match.group(1)
+
+            if 'gap_x = ' in content:
+                match = re.search(r"gap_x = (\d+)", content)
+                if match:
+                    self.gap_x = int(match.group(1))
+
+            if 'gap_y = ' in content:
+                match = re.search(r"gap_y = (\d+)", content)
+                if match:
+                    self.gap_y = int(match.group(1))
+
+            if 'xinerama_head = ' in content:
+                match = re.search(r"xinerama_head = (\d+)", content)
+                if match:
+                    self.monitor = int(match.group(1))
+
+            if '${image ' in content:
+                match = re.search(r'\$\{image ([^\s]+) -p (\d+),(\d+) -s (\d+)x(\d+)\}', content)
+                if match:
+                    self.logo_file = match.group(1)
+                    self.logo_padding_x = int(match.group(2))
+                    self.logo_padding_y = int(match.group(3))
+                    self.logo_size = int(match.group(4))
+
+            size_matches = re.findall(r":size=(\d+)", content)
+            if len(size_matches) >= 2:
+                sizes = sorted(list(set([int(s) for s in size_matches])))
+                if len(sizes) >= 1:
+                    self.font_size_small = sizes[0]
+                if len(sizes) >= 2:
+                    self.font_size_medium = sizes[1] if len(sizes) > 1 else sizes[0]
+                if len(sizes) >= 3:
+                    self.font_size_large = sizes[-1]
+
+            if 'conky.text = [[' in content:
+                text_section = content.split('conky.text = [[')[1].split(']]')[0]
+
+                lines = text_section.split('\n')
+                offset_count = 0
+                found_image = False
+                for line in lines:
+                    if 'image' in line:
+                        found_image = True
+                        continue
+                    if found_image and line.strip() == '':
+                        offset_count += 1
+                    elif found_image and line.strip() != '':
+                        break
+                if offset_count > 0:
+                    self.text_offset = offset_count
+
+                category_pattern = r'\$\{font.*?\}.*?\n(\n*)'
+                spacing_matches = re.findall(category_pattern, text_section)
+                if spacing_matches:
+                    spacing_counts = [len(m) for m in spacing_matches if m]
+                    if spacing_counts:
+                        self.line_spacing = max(set(spacing_counts), key=spacing_counts.count)
+
+                medium_match = re.search(r':style=([^:]+):size=' + str(self.font_size_medium), text_section)
+                if medium_match:
+                    self.font_style_medium = medium_match.group(1)
+
+                large_match = re.search(r':style=([^:]+):size=' + str(self.font_size_large), text_section)
+                if large_match:
+                    self.font_style_large = large_match.group(1)
+
+            self.enabled_infos = []
+            self.info_intervals = {}
+
+            text_section = content.split('conky.text = [[')[1] if 'conky.text = [[' in content else ''
+            lines = text_section.split('\n')
+            separator_count = 0
+
+            for line in lines:
+                line_stripped = line.strip()
+
+                if '${hr' in line_stripped:
+                    separator_count += 1
+                    self.enabled_infos.append(f'separator_{separator_count}')
+                    continue
+
+                if '${nodename}' in line_stripped and 'powered by' in line_stripped:
+                    if 'hostname' not in self.enabled_infos:
+                        self.enabled_infos.append('hostname')
+                        self.info_intervals['hostname'] = 0
+                    continue
+
+                for info in SystemInfo.AVAILABLE_INFOS:
+                    if info['id'] == 'hostname':
+                        continue
+
+                    has_label = info['label'] in line_stripped
+                    has_icon = info['icon'] and info['icon'] in line_stripped
+
+                    if has_label and (has_icon or '${exec' in line_stripped):
+                        if info['id'] not in self.enabled_infos:
+                            self.enabled_infos.append(info['id'])
+
+                            if info['script']:
+                                script_name = info['script'].split()[0]
+                                interval_pattern = r"exec[pi]* (\d+) python3.*" + script_name
+                                match = re.search(interval_pattern, line_stripped)
+                                if match:
+                                    self.info_intervals[info['id']] = int(match.group(1))
+                                else:
+                                    self.info_intervals[info['id']] = info['interval']
+                            else:
+                                self.info_intervals[info['id']] = info['interval']
+                            break
+
+            self.separator_counter = separator_count
+
+            autostart_file = Path.home() / ".config" / "autostart" / "guideos-conky-custom.desktop"
+            self.autostart = autostart_file.exists()
+
+            return True
+
+        except Exception as e:
+            print(f"Fehler beim Laden der Config: {e}")
+            return False
+
+    def generate_conky_lua(self):
+        """Generiert den Conky Lua-Code"""
+
+        transparent = "true" if self.bg_transparent else "false"
+        argb_value = self.bg_alpha if not self.bg_transparent else 0
+
+        config_section = f"""-- Generiert mit GuideOS Conky Configurator
+
+conky.config = {{
+-- Generelles
+    update_interval = 1,
+    cpu_avg_samples = 2,
+    net_avg_samples = 2,
+    double_buffer = true,
+    temperature_unit = 'celsius',
+
+-- Fenster Einstellungen
+    own_window_class = 'Conky',
+    own_window = true,
+    own_window_type = 'normal',
+    own_window_transparent = {transparent},
+    own_window_hints = 'undecorated,sticky,skip_taskbar,skip_pager,below',
+    own_window_argb_visual = true,
+    own_window_argb_value = {argb_value},
+    own_window_colour = '{self.bg_color}',
+    minimum_height = 400,
+    minimum_width = 400,
+    alignment = '{self.alignment}',
+    gap_x = {self.gap_x},
+    gap_y = {self.gap_y},
+    xinerama_head = {self.monitor},
+
+-- Text Einstellungen
+    use_xft = true,
+    use_spacer = right,
+    override_utf8_locale = true,
+    font = '{self.font_family}:style={self.font_style_small}:size={self.font_size_small}',
+    xftalpha = 0.5,
+    uppercase = false,
+    default_color = '{self.text_color}',
+    color1 = '{self.text_color}',
+    color2 = '{self.accent_color}',
+}}
+
+"""
+
+        text_lines = ["conky.text = [["]
+
+        if self.logo_file and os.path.exists(self.logo_file):
+            text_lines.append(f"${{image {self.logo_file} -p {self.logo_padding_x},{self.logo_padding_y} -s {self.logo_size}x{self.logo_size}}}")
+
+        for _ in range(self.text_offset):
+            text_lines.append("")
+
+        for idx, info_id in enumerate(self.enabled_infos):
+            if info_id.startswith('separator_'):
+                text_lines.append("${hr}")
+                if idx < len(self.enabled_infos) - 1:
+                    for _ in range(self.line_spacing):
+                        text_lines.append("")
+                continue
+
+            info = next((i for i in SystemInfo.AVAILABLE_INFOS if i["id"] == info_id), None)
+            if not info:
+                continue
+
+            interval = self.info_intervals.get(info_id, info["interval"])
+            icon = info["icon"]
+            label = info["label"]
+
+            if info_id == "hostname":
+                text_lines.append(f"${{color2}}${{font {self.font_family}:style={self.font_style_large}:size={self.font_size_large}}}${{nodename}} powered by ${{execi 21600 cat /etc/guideos-version 2>/dev/null || echo 'GuideOS'}}${{color1}}")
+                if idx < len(self.enabled_infos) - 1:
+                    for _ in range(self.line_spacing):
+                        text_lines.append("")
+                continue
+
+            if info["script"]:
+                script_path = f"~/.conky/{info['script'].split()[0]}"
+                script_args = " ".join(info["script"].split()[1:]) if len(info["script"].split()) > 1 else ""
+
+                if script_args:
+                    cmd = f"${{execpi {interval} python3 {script_path} {script_args}}}"
+                else:
+                    cmd = f"${{execi {interval} python3 {script_path}}}"
+
+                if info_id in ["network", "disk"]:
+                    text_lines.append(f"${{font {self.font_family}:style={self.font_style_medium}:size={self.font_size_medium}}}{icon}  ${{color2}}{label}${{color1}}")
+                    text_lines.append(f"${{font {self.font_family}:style={self.font_style_small}:size={self.font_size_small}}}{cmd}")
+                else:
+                    text_lines.append(f"${{font {self.font_family}:style={self.font_style_medium}:size={self.font_size_medium}}}{icon}  ${{color2}}{label}${{color1}} [{cmd}]")
+            else:
+                text_lines.append(f"${{font {self.font_family}:style={self.font_style_medium}:size={self.font_size_medium}}}{icon}  ${{color2}}{label}${{color1}} [{info['var']}]")
+
+            if idx < len(self.enabled_infos) - 1:
+                for _ in range(self.line_spacing):
+                    text_lines.append("")
+
+        text_lines.append("]]")
+
+        return config_section + "\n".join(text_lines)
+
+class InfoRow(Gtk.Box):
+    """Widget für eine aktivierbare/sortierbare Systeminformation"""
+
+    def __init__(self, info, enabled, interval, parent):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.info = info
+        self.parent = parent
+        self.set_margin_top(6)
+        self.set_margin_bottom(6)
+
+        self.check = Gtk.CheckButton()
+        self.check.set_active(enabled)
+        self.check.connect("toggled", self.on_toggled)
+        self.append(self.check)
+
+        icon_label = Gtk.Label(label=f"{info['icon']}  {info['label']}")
+        icon_label.set_xalign(0)
+        icon_label.set_hexpand(True)
+        self.append(icon_label)
+
+        if info["script"]:
+            interval_label = Gtk.Label(label="Intervall (s):")
+            self.append(interval_label)
+
+            self.interval_spin = Gtk.SpinButton()
+            self.interval_spin.set_range(1, 86400)
+            self.interval_spin.set_increments(1, 60)
+            self.interval_spin.set_value(interval)
+            self.interval_spin.set_digits(0)
+            self.append(self.interval_spin)
+        else:
+            self.interval_spin = None
+
+        button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+
+        up_btn = Gtk.Button(icon_name="go-up-symbolic")
+        up_btn.connect("clicked", lambda b: self.parent.move_info_up(self.info["id"]))
+        button_box.append(up_btn)
+
+        down_btn = Gtk.Button(icon_name="go-down-symbolic")
+        down_btn.connect("clicked", lambda b: self.parent.move_info_down(self.info["id"]))
+        button_box.append(down_btn)
+
+        self.append(button_box)
+
+    def on_toggled(self, check):
+        self.parent.update_enabled_info(self.info["id"], check.get_active())
+
+    def is_enabled(self):
+        return self.check.get_active()
+
+    def get_interval(self):
+        if self.interval_spin:
+            return int(self.interval_spin.get_value())
+        return self.info["interval"]
+
+class SeparatorRow(Gtk.Box):
+    """Widget für eine verschiebbare Trennlinie"""
+
+    def __init__(self, separator_id, parent):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.separator_id = separator_id
+        self.parent = parent
+        self.set_margin_top(6)
+        self.set_margin_bottom(6)
+
+        separator_label = Gtk.Label(label="───  Trennlinie  ───")
+        separator_label.set_xalign(0)
+        separator_label.set_hexpand(True)
+        self.append(separator_label)
+
+        button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+
+        up_btn = Gtk.Button(icon_name="go-up-symbolic")
+        up_btn.connect("clicked", lambda b: self.parent.move_info_up(self.separator_id))
+        button_box.append(up_btn)
+
+        down_btn = Gtk.Button(icon_name="go-down-symbolic")
+        down_btn.connect("clicked", lambda b: self.parent.move_info_down(self.separator_id))
+        button_box.append(down_btn)
+
+        remove_btn = Gtk.Button(icon_name="user-trash-symbolic")
+        remove_btn.connect("clicked", lambda b: self.parent.remove_separator(self.separator_id))
+        button_box.append(remove_btn)
+
+        self.append(button_box)
+
+class ConkyConfiguratorWindow(Adw.ApplicationWindow):
+    """Hauptfenster der Anwendung"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        self.config = ConkyConfig()
+        self.conky_process = None
+        self.info_rows = {}
+
+        self.set_title("GuideOS Conky Configurator")
+        self.set_default_size(800, 900)
+
+        header = Adw.HeaderBar()
+
+        self.test_btn = Gtk.Button(label="Test")
+        self.test_btn.add_css_class("suggested-action")
+        self.test_btn.connect("clicked", self.on_test)
+        header.pack_start(self.test_btn)
+
+        save_btn = Gtk.Button(label="Speichern")
+        save_btn.add_css_class("suggested-action")
+        save_btn.connect("clicked", self.on_save)
+        header.pack_end(save_btn)
+
+        toolbarview = Adw.ToolbarView()
+        toolbarview.add_top_bar(header)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        main_box.set_margin_top(12)
+        main_box.set_margin_bottom(12)
+        main_box.set_margin_start(12)
+        main_box.set_margin_end(12)
+
+        main_box.append(self.create_logo_group())
+        main_box.append(self.create_appearance_group())
+        main_box.append(self.create_position_group())
+        main_box.append(self.create_system_info_group())
+        main_box.append(self.create_autostart_group())
+
+        scrolled.set_child(main_box)
+        toolbarview.set_content(scrolled)
+
+        self.set_content(toolbarview)
+
+        self.connect("close-request", self.on_close_request)
+
+    def create_logo_group(self):
+        """Erstellt die Logo-Einstellungen"""
+        group = Adw.PreferencesGroup()
+        group.set_title("Logo")
+
+        self.logo_row = Adw.ComboRow()
+        self.logo_row.set_title("Logo-Datei")
+        self.logo_row.set_subtitle("Wähle ein Logo aus")
+        self.logo_row.set_enable_search(True)
+
+        self.logo_dict = self.get_available_logos()
+        display_names = list(self.logo_dict.keys())
+
+        logo_model = Gtk.StringList.new(display_names)
+        self.logo_row.set_model(logo_model)
+
+        selected_idx = 0
+        for idx, (display_name, full_path) in enumerate(self.logo_dict.items()):
+            if full_path == self.config.logo_file:
+                selected_idx = idx
+                break
+
+        self.logo_row.set_selected(selected_idx)
+        self.logo_row.connect("notify::selected", self.on_logo_changed)
+        group.add(self.logo_row)
+
+        logo_size_row = Adw.SpinRow()
+        logo_size_row.set_title("Logo-Größe")
+        logo_size_row.set_subtitle("Größe des Logos in Pixeln (Quadratisch)")
+        adjustment_size = Gtk.Adjustment(value=self.config.logo_size, lower=20, upper=200, step_increment=5)
+        logo_size_row.set_adjustment(adjustment_size)
+        logo_size_row.set_digits(0)
+        logo_size_row.connect("notify::value", lambda r, _: setattr(self.config, "logo_size", int(r.get_value())))
+        group.add(logo_size_row)
+
+        logo_padding_x_row = Adw.SpinRow()
+        logo_padding_x_row.set_title("Logo Abstand horizontal")
+        logo_padding_x_row.set_subtitle("Horizontaler Abstand des Logos")
+        adjustment_logo_x = Gtk.Adjustment(value=self.config.logo_padding_x, lower=0, upper=200, step_increment=1)
+        logo_padding_x_row.set_adjustment(adjustment_logo_x)
+        logo_padding_x_row.set_digits(0)
+        logo_padding_x_row.connect("notify::value", lambda r, _: setattr(self.config, "logo_padding_x", int(r.get_value())))
+        group.add(logo_padding_x_row)
+
+        logo_padding_y_row = Adw.SpinRow()
+        logo_padding_y_row.set_title("Logo Abstand vertikal")
+        logo_padding_y_row.set_subtitle("Vertikaler Abstand des Logos")
+        adjustment_logo_y = Gtk.Adjustment(value=self.config.logo_padding_y, lower=0, upper=200, step_increment=1)
+        logo_padding_y_row.set_adjustment(adjustment_logo_y)
+        logo_padding_y_row.set_digits(0)
+        logo_padding_y_row.connect("notify::value", lambda r, _: setattr(self.config, "logo_padding_y", int(r.get_value())))
+        group.add(logo_padding_y_row)
+
+        text_offset_row = Adw.SpinRow()
+        text_offset_row.set_title("Abstand zur ersten Textzeile")
+        text_offset_row.set_subtitle("Anzahl der Leerzeilen nach dem Logo")
+        adjustment_text_offset = Gtk.Adjustment(value=self.config.text_offset, lower=0, upper=10, step_increment=1)
+        text_offset_row.set_adjustment(adjustment_text_offset)
+        text_offset_row.set_digits(0)
+        text_offset_row.connect("notify::value", lambda r, _: setattr(self.config, "text_offset", int(r.get_value())))
+        group.add(text_offset_row)
+
+        return group
+
+    def get_available_logos(self):
+        """Ermittelt verfügbare Logo-Dateien und gibt dict {display_name: full_path} zurück"""
+        logo_dict = {}
+
+        default_logo = "/usr/lib/guideos-conky/images/guideos.png"
+        if os.path.exists(default_logo):
+            logo_dict["guideos.png (system)"] = default_logo
+
+        image_dir = Path("./image")
+        if image_dir.exists():
+            for ext in ['*.png', '*.jpg', '*.jpeg', '*.svg']:
+                for file in image_dir.glob(ext):
+                    full_path = str(file.absolute())
+                    display_name = f"{file.name} (./image)"
+                    logo_dict[display_name] = full_path
+
+        conky_images = Path.home() / ".conky" / "images"
+        if conky_images.exists():
+            for ext in ['*.png', '*.jpg', '*.jpeg', '*.svg']:
+                for file in conky_images.glob(ext):
+                    full_path = str(file)
+                    display_name = f"{file.name} (~/.conky/images)"
+                    logo_dict[display_name] = full_path
+
+        if not logo_dict:
+            logo_dict["guideos.png (system)"] = default_logo
+
+        return logo_dict
+
+    def on_logo_changed(self, combo, _):
+        """Logo-Auswahl wurde geändert"""
+        selected_idx = combo.get_selected()
+        if selected_idx >= 0:
+            display_names = list(self.logo_dict.keys())
+            if selected_idx < len(display_names):
+                display_name = display_names[selected_idx]
+                self.config.logo_file = self.logo_dict[display_name]
+
+    def create_appearance_group(self):
+        """Erstellt die Appearance-Einstellungen"""
+        group = Adw.PreferencesGroup()
+        group.set_title("Erscheinungsbild")
+
+        font_row = Adw.ComboRow()
+        font_row.set_title("Nerd Font Schriftart")
+        font_row.set_enable_search(True)
+
+        fonts = self.get_nerd_fonts()
+        font_model = Gtk.StringList.new(fonts)
+        font_row.set_model(font_model)
+
+        try:
+            idx = fonts.index(self.config.font_family)
+            font_row.set_selected(idx)
+        except ValueError:
+            font_row.set_selected(0)
+
+        font_row.connect("notify::selected", self.on_font_changed)
+        group.add(font_row)
+
+        size_small_row = Adw.SpinRow()
+        size_small_row.set_title("Schriftgröße Klein")
+        size_small_row.set_subtitle("Für Detailinformationen")
+        adjustment_small = Gtk.Adjustment(value=self.config.font_size_small, lower=6, upper=24, step_increment=1)
+        size_small_row.set_adjustment(adjustment_small)
+        size_small_row.set_digits(0)
+        size_small_row.connect("notify::value", lambda r, _: setattr(self.config, "font_size_small", int(r.get_value())))
+        group.add(size_small_row)
+
+        font_style_small_row = Adw.ComboRow()
+        font_style_small_row.set_title("Font Stil Klein")
+        font_style_small_row.set_enable_search(True)
+        styles = ["Regular", "Bold", "Italic", "Bold Italic", "Light", "Medium", "SemiBold", "ExtraBold", "Black"]
+        style_model = Gtk.StringList.new(styles)
+        font_style_small_row.set_model(style_model)
+        try:
+            idx = styles.index(self.config.font_style_small)
+            font_style_small_row.set_selected(idx)
+        except ValueError:
+            font_style_small_row.set_selected(0)
+        font_style_small_row.connect("notify::selected", self.on_font_style_small_changed)
+        group.add(font_style_small_row)
+
+        size_medium_row = Adw.SpinRow()
+        size_medium_row.set_title("Schriftgröße Mittel")
+        size_medium_row.set_subtitle("Für Labels und Standardtext")
+        adjustment_medium = Gtk.Adjustment(value=self.config.font_size_medium, lower=6, upper=24, step_increment=1)
+        size_medium_row.set_adjustment(adjustment_medium)
+        size_medium_row.set_digits(0)
+        size_medium_row.connect("notify::value", lambda r, _: setattr(self.config, "font_size_medium", int(r.get_value())))
+        group.add(size_medium_row)
+
+        font_style_medium_row = Adw.ComboRow()
+        font_style_medium_row.set_title("Font Stil Mittel")
+        font_style_medium_row.set_enable_search(True)
+        style_model = Gtk.StringList.new(styles)
+        font_style_medium_row.set_model(style_model)
+        try:
+            idx = styles.index(self.config.font_style_medium)
+            font_style_medium_row.set_selected(idx)
+        except ValueError:
+            font_style_medium_row.set_selected(0)
+        font_style_medium_row.connect("notify::selected", self.on_font_style_medium_changed)
+        group.add(font_style_medium_row)
+
+        size_large_row = Adw.SpinRow()
+        size_large_row.set_title("Schriftgröße Groß")
+        size_large_row.set_subtitle("Für Überschriften")
+        adjustment_large = Gtk.Adjustment(value=self.config.font_size_large, lower=6, upper=32, step_increment=1)
+        size_large_row.set_adjustment(adjustment_large)
+        size_large_row.set_digits(0)
+        size_large_row.connect("notify::value", lambda r, _: setattr(self.config, "font_size_large", int(r.get_value())))
+        group.add(size_large_row)
+
+        font_style_large_row = Adw.ComboRow()
+        font_style_large_row.set_title("Font Stil Groß")
+        font_style_large_row.set_enable_search(True)
+        style_model = Gtk.StringList.new(styles)
+        font_style_large_row.set_model(style_model)
+        try:
+            idx = styles.index(self.config.font_style_large)
+            font_style_large_row.set_selected(idx)
+        except ValueError:
+            font_style_large_row.set_selected(0)
+        font_style_large_row.connect("notify::selected", self.on_font_style_large_changed)
+        group.add(font_style_large_row)
+
+        text_color_row = Adw.ActionRow()
+        text_color_row.set_title("Textfarbe")
+        text_color_btn = Gtk.ColorButton()
+        rgba = Gdk.RGBA()
+        rgba.parse(self.config.text_color)
+        text_color_btn.set_rgba(rgba)
+        text_color_btn.connect("color-set", self.on_text_color_changed)
+        text_color_row.add_suffix(text_color_btn)
+        group.add(text_color_row)
+
+        accent_color_row = Adw.ActionRow()
+        accent_color_row.set_title("Akzentfarbe")
+        accent_color_btn = Gtk.ColorButton()
+        rgba = Gdk.RGBA()
+        rgba.parse(self.config.accent_color)
+        accent_color_btn.set_rgba(rgba)
+        accent_color_btn.connect("color-set", self.on_accent_color_changed)
+        accent_color_row.add_suffix(accent_color_btn)
+        group.add(accent_color_row)
+
+        bg_color_row = Adw.ActionRow()
+        bg_color_row.set_title("Hintergrundfarbe")
+        bg_color_btn = Gtk.ColorButton()
+        rgba = Gdk.RGBA()
+        rgba.parse(self.config.bg_color)
+        bg_color_btn.set_rgba(rgba)
+        bg_color_btn.connect("color-set", self.on_bg_color_changed)
+        bg_color_row.add_suffix(bg_color_btn)
+        group.add(bg_color_row)
+
+        bg_trans_row = Adw.SwitchRow()
+        bg_trans_row.set_title("Transparenter Hintergrund")
+        bg_trans_row.set_active(self.config.bg_transparent)
+        bg_trans_row.connect("notify::active", lambda r, _: setattr(self.config, "bg_transparent", r.get_active()))
+        group.add(bg_trans_row)
+
+        self.alpha_row = Adw.SpinRow()
+        self.alpha_row.set_title("Hintergrund Transparenz")
+        self.alpha_row.set_subtitle("0 = vollständig transparent, 255 = vollständig opak")
+        adjustment_alpha = Gtk.Adjustment(value=self.config.bg_alpha, lower=0, upper=255, step_increment=5)
+        self.alpha_row.set_adjustment(adjustment_alpha)
+        self.alpha_row.set_digits(0)
+        self.alpha_row.connect("notify::value", lambda r, _: setattr(self.config, "bg_alpha", int(r.get_value())))
+        self.alpha_row.set_sensitive(not self.config.bg_transparent)
+        group.add(self.alpha_row)
+
+        bg_trans_row.connect("notify::active", lambda r, _: self.alpha_row.set_sensitive(not r.get_active()))
+
+        line_spacing_row = Adw.SpinRow()
+        line_spacing_row.set_title("Zeilenabstand zwischen Kategorien")
+        line_spacing_row.set_subtitle("Anzahl der Leerzeilen zwischen Systeminformationen")
+        adjustment_line_spacing = Gtk.Adjustment(value=self.config.line_spacing, lower=0, upper=3, step_increment=1)
+        line_spacing_row.set_adjustment(adjustment_line_spacing)
+        line_spacing_row.set_digits(0)
+        line_spacing_row.connect("notify::value", lambda r, _: setattr(self.config, "line_spacing", int(r.get_value())))
+        group.add(line_spacing_row)
+
+        return group
+
+    def create_position_group(self):
+        """Erstellt die Positions-Einstellungen"""
+        group = Adw.PreferencesGroup()
+        group.set_title("Position")
+
+        monitor_row = Adw.SpinRow()
+        monitor_row.set_title("Monitor")
+        monitor_row.set_subtitle("0 = primärer Monitor")
+        adjustment_mon = Gtk.Adjustment(value=self.config.monitor, lower=0, upper=10, step_increment=1)
+        monitor_row.set_adjustment(adjustment_mon)
+        monitor_row.set_digits(0)
+        monitor_row.connect("notify::value", lambda r, _: setattr(self.config, "monitor", int(r.get_value())))
+        group.add(monitor_row)
+
+        align_row = Adw.ComboRow()
+        align_row.set_title("Position")
+        align_row.set_enable_search(True)
+        alignments = ["top_left", "top_middle", "top_right", "middle_left", "middle_middle", "middle_right", "bottom_left", "bottom_middle", "bottom_right"]
+        align_model = Gtk.StringList.new(alignments)
+        align_row.set_model(align_model)
+
+        try:
+            idx = alignments.index(self.config.alignment)
+            align_row.set_selected(idx)
+        except ValueError:
+            align_row.set_selected(2)
+
+        align_row.connect("notify::selected", lambda r, _: setattr(self.config, "alignment", alignments[r.get_selected()]))
+        group.add(align_row)
+
+        gap_x_row = Adw.SpinRow()
+        gap_x_row.set_title("Abstand zum horizontalen Rand")
+        adjustment_x = Gtk.Adjustment(value=self.config.gap_x, lower=0, upper=1000, step_increment=5)
+        gap_x_row.set_adjustment(adjustment_x)
+        gap_x_row.set_digits(0)
+        gap_x_row.connect("notify::value", lambda r, _: setattr(self.config, "gap_x", int(r.get_value())))
+        group.add(gap_x_row)
+
+        gap_y_row = Adw.SpinRow()
+        gap_y_row.set_title("Abstand zum vertikalen Rand")
+        adjustment_y = Gtk.Adjustment(value=self.config.gap_y, lower=0, upper=1000, step_increment=5)
+        gap_y_row.set_adjustment(adjustment_y)
+        gap_y_row.set_digits(0)
+        gap_y_row.connect("notify::value", lambda r, _: setattr(self.config, "gap_y", int(r.get_value())))
+        group.add(gap_y_row)
+
+        return group
+
+    def create_system_info_group(self):
+        """Erstellt die Systeminformationen-Einstellungen"""
+        group = Adw.PreferencesGroup()
+        group.set_title("Systeminformationen")
+        group.set_description("Aktivieren und sortieren Sie die anzuzeigenden Informationen")
+
+        add_separator_btn = Gtk.Button(label="Trennlinie einfügen", icon_name="list-add-symbolic")
+        add_separator_btn.connect("clicked", self.on_add_separator)
+        add_separator_btn.set_margin_bottom(12)
+
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        content_box.append(add_separator_btn)
+
+        self.info_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        content_box.append(self.info_container)
+
+        for item_id in self.config.enabled_infos:
+            if item_id.startswith('separator_'):
+                row = SeparatorRow(item_id, self)
+                self.info_rows[item_id] = row
+                self.info_container.append(row)
+            else:
+                info = next((i for i in SystemInfo.AVAILABLE_INFOS if i["id"] == item_id), None)
+                if info:
+                    interval = self.config.info_intervals.get(info["id"], info["interval"])
+                    row = InfoRow(info, True, interval, self)
+                    self.info_rows[item_id] = row
+                    self.info_container.append(row)
+
+        for info in SystemInfo.AVAILABLE_INFOS:
+            if info["id"] not in self.config.enabled_infos:
+                interval = self.config.info_intervals.get(info["id"], info["interval"])
+                row = InfoRow(info, False, interval, self)
+                self.info_rows[info["id"]] = row
+                self.info_container.append(row)
+
+        expander = Adw.ExpanderRow()
+        expander.set_title("Informationen anpassen")
+        expander.add_row(Adw.ActionRow(child=content_box))
+        group.add(expander)
+
+        return group
+
+    def create_autostart_group(self):
+        """Erstellt die Autostart-Einstellungen"""
+        group = Adw.PreferencesGroup()
+        group.set_title("Autostart")
+
+        autostart_row = Adw.SwitchRow()
+        autostart_row.set_title("Autostart aktivieren")
+        autostart_row.set_subtitle("Lädt Conky beim Systemstart. Deaktiviert System-Conky falls vorhanden.")
+        autostart_row.set_active(self.config.autostart)
+        autostart_row.connect("notify::active", lambda r, _: setattr(self.config, "autostart", r.get_active()))
+        group.add(autostart_row)
+
+        return group
+
+    def get_nerd_fonts(self):
+        """Ermittelt installierte Nerd Fonts"""
+        try:
+            result = subprocess.run(['fc-list', ':', 'family'], capture_output=True, text=True)
+            fonts = set()
+            for line in result.stdout.split('\n'):
+                if 'Nerd Font' in line or 'NerdFont' in line:
+                    parts = line.split(',')
+                    for part in parts:
+                        part = part.strip()
+                        if 'Nerd Font' in part or 'NerdFont' in part:
+                            fonts.add(part)
+            return sorted(list(fonts)) if fonts else ["UbuntuMono Nerd Font", "FiraCode Nerd Font", "JetBrainsMono Nerd Font"]
+        except:
+            return ["UbuntuMono Nerd Font", "FiraCode Nerd Font", "JetBrainsMono Nerd Font"]
+
+    def on_font_changed(self, combo, _):
+        selected_idx = combo.get_selected()
+        model = combo.get_model()
+        self.config.font_family = model.get_string(selected_idx)
+
+    def on_font_style_small_changed(self, combo, _):
+        selected_idx = combo.get_selected()
+        model = combo.get_model()
+        self.config.font_style_small = model.get_string(selected_idx)
+
+    def on_font_style_medium_changed(self, combo, _):
+        selected_idx = combo.get_selected()
+        model = combo.get_model()
+        self.config.font_style_medium = model.get_string(selected_idx)
+
+    def on_font_style_large_changed(self, combo, _):
+        selected_idx = combo.get_selected()
+        model = combo.get_model()
+        self.config.font_style_large = model.get_string(selected_idx)
+
+    def on_text_color_changed(self, btn):
+        rgba = btn.get_rgba()
+        self.config.text_color = self.rgba_to_hex(rgba)
+
+    def on_accent_color_changed(self, btn):
+        rgba = btn.get_rgba()
+        self.config.accent_color = self.rgba_to_hex(rgba)
+
+    def on_bg_color_changed(self, btn):
+        rgba = btn.get_rgba()
+        self.config.bg_color = self.rgba_to_hex(rgba)
+
+    def rgba_to_hex(self, rgba):
+        """Konvertiert RGBA zu Hex"""
+        r = int(rgba.red * 255)
+        g = int(rgba.green * 255)
+        b = int(rgba.blue * 255)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def on_add_separator(self, btn):
+        """Fügt eine neue Trennlinie hinzu"""
+        self.config.separator_counter += 1
+        separator_id = f'separator_{self.config.separator_counter}'
+        self.config.enabled_infos.append(separator_id)
+
+        row = SeparatorRow(separator_id, self)
+        self.info_rows[separator_id] = row
+        self.info_container.append(row)
+
+    def remove_separator(self, separator_id):
+        """Entfernt eine Trennlinie"""
+        if separator_id in self.config.enabled_infos:
+            self.config.enabled_infos.remove(separator_id)
+
+        if separator_id in self.info_rows:
+            row = self.info_rows[separator_id]
+            self.info_container.remove(row)
+            del self.info_rows[separator_id]
+
+    def update_enabled_info(self, info_id, enabled):
+        """Aktualisiert die Aktivierung einer Systeminformation"""
+        if enabled and info_id not in self.config.enabled_infos:
+            self.config.enabled_infos.append(info_id)
+        elif not enabled and info_id in self.config.enabled_infos:
+            self.config.enabled_infos.remove(info_id)
+
+    def move_info_up(self, item_id):
+        """Verschiebt eine Info oder Separator nach oben"""
+        if item_id not in self.config.enabled_infos:
+            return
+
+        idx = self.config.enabled_infos.index(item_id)
+        if idx > 0:
+            self.config.enabled_infos[idx], self.config.enabled_infos[idx-1] = \
+                self.config.enabled_infos[idx-1], self.config.enabled_infos[idx]
+            self.rebuild_info_list()
+
+    def move_info_down(self, item_id):
+        """Verschiebt eine Info oder Separator nach unten"""
+        if item_id not in self.config.enabled_infos:
+            return
+
+        idx = self.config.enabled_infos.index(item_id)
+        if idx < len(self.config.enabled_infos) - 1:
+            self.config.enabled_infos[idx], self.config.enabled_infos[idx+1] = \
+                self.config.enabled_infos[idx+1], self.config.enabled_infos[idx]
+            self.rebuild_info_list()
+
+    def rebuild_info_list(self):
+        """Baut die Info-Liste neu auf basierend auf Sortierung"""
+        child = self.info_container.get_first_child()
+        while child:
+            next_child = child.get_next_sibling()
+            self.info_container.remove(child)
+            child = next_child
+
+        for item_id in self.config.enabled_infos:
+            if item_id in self.info_rows:
+                self.info_container.append(self.info_rows[item_id])
+
+        for item_id, row in self.info_rows.items():
+            if item_id not in self.config.enabled_infos and not item_id.startswith('separator_'):
+                self.info_container.append(row)
+
+    def on_close_request(self, window):
+        """Wird beim Schließen des Fensters aufgerufen"""
+        if self.conky_process:
+            self.conky_process.terminate()
+            try:
+                self.conky_process.wait(timeout=2)
+            except:
+                self.conky_process.kill()
+            self.conky_process = None
+
+        self.cleanup_temp_dir()
+        return False
+
+    def cleanup_temp_dir(self):
+        """Löscht das temporäre Test-Verzeichnis"""
+        temp_dir = Path("/tmp/guideos-conky-test")
+        if temp_dir.exists():
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception:
+                pass
+
+    def on_test(self, btn):
+        """Testet die Konfiguration ohne zu speichern"""
+        for info_id, row in self.info_rows.items():
+            if not info_id.startswith('separator_') and hasattr(row, 'is_enabled'):
+                if row.is_enabled():
+                    self.config.info_intervals[info_id] = row.get_interval()
+
+        if self.conky_process:
+            self.conky_process.terminate()
+            try:
+                self.conky_process.wait(timeout=2)
+            except:
+                self.conky_process.kill()
+            self.conky_process = None
+
+            subprocess.run(['killall', 'conky'], stderr=subprocess.DEVNULL)
+
+            self.cleanup_temp_dir()
+            self.test_btn.set_label("Test")
+            return
+
+        subprocess.run(['killall', 'conky'], stderr=subprocess.DEVNULL)
+
+        temp_dir = Path("/tmp/guideos-conky-test")
+        temp_dir.mkdir(exist_ok=True)
+
+        config_file = temp_dir / "GuideOS.lua"
+        with open(config_file, 'w') as f:
+            f.write(self.config.generate_conky_lua())
+
+        self.copy_scripts_to_dir(temp_dir)
+
+        try:
+            self.conky_process = subprocess.Popen(['conky', '-c', str(config_file)])
+
+            if self.conky_process and self.conky_process.poll() is None:
+                self.test_btn.set_label("Test beenden")
+            else:
+                self.test_btn.set_label("Test")
+
+        except Exception as e:
+            self.cleanup_temp_dir()
+            dialog = Adw.MessageDialog(
+                transient_for=self,
+                heading="Fehler beim Testen",
+                body=str(e)
+            )
+            dialog.add_response("ok", "OK")
+            dialog.present()
+
+    def on_save(self, btn):
+        """Speichert die Konfiguration nach ~/.conky"""
+        for info_id, row in self.info_rows.items():
+            if not info_id.startswith('separator_') and hasattr(row, 'is_enabled'):
+                if row.is_enabled():
+                    self.config.info_intervals[info_id] = row.get_interval()
+
+        conky_dir = Path.home() / ".conky"
+        conky_dir.mkdir(exist_ok=True)
+
+        config_file = conky_dir / "GuideOS.lua"
+        with open(config_file, 'w') as f:
+            f.write(self.config.generate_conky_lua())
+
+        self.copy_scripts_to_dir(conky_dir)
+
+        if self.config.autostart:
+            self.setup_autostart(config_file)
+            self.disable_system_conky_autostart()
+        else:
+            self.remove_autostart()
+
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            heading="Erfolgreich gespeichert",
+            body=f"Die Konfiguration wurde nach {config_file} gespeichert."
+        )
+        dialog.add_response("ok", "OK")
+        dialog.set_default_response("ok")
+        dialog.add_response("start", "Conky jetzt starten")
+        dialog.set_response_appearance("start", Adw.ResponseAppearance.SUGGESTED)
+        dialog.connect("response", self.on_save_dialog_response, config_file)
+        dialog.present()
+
+    def on_save_dialog_response(self, dialog, response, config_file):
+        if response == "start":
+            subprocess.run(['killall', 'conky'], stderr=subprocess.DEVNULL)
+            subprocess.Popen(['conky', '-c', str(config_file)])
+
+    def copy_scripts_to_dir(self, target_dir):
+        """Kopiert hwinfo.py und check-update.py ins Zielverzeichnis"""
+        source_dir = Path("/usr/lib/guideos-conky")
+
+        scripts = ["hwinfo.py", "check-update.py"]
+        for script in scripts:
+            source = source_dir / script
+            target = target_dir / script
+
+            if source.exists():
+                shutil.copy2(source, target)
+                target.chmod(0o755)
+
+        images_source = source_dir / "images"
+        images_target = target_dir / "images"
+        if images_source.exists():
+            shutil.copytree(images_source, images_target, dirs_exist_ok=True)
+
+    def setup_autostart(self, config_file):
+        """Richtet Autostart ein"""
+        autostart_dir = Path.home() / ".config" / "autostart"
+        autostart_dir.mkdir(parents=True, exist_ok=True)
+
+        desktop_file = autostart_dir / "guideos-conky-custom.desktop"
+
+        content = f"""[Desktop Entry]
+Type=Application
+Name=GuideOS Conky (Custom)
+Comment=Custom Conky configuration
+Exec=sh -c "sleep 5 && killall conky; conky -c {config_file}"
+Terminal=false
+Categories=System;
+X-GNOME-Autostart-enabled=true
+"""
+
+        with open(desktop_file, 'w') as f:
+            f.write(content)
+
+    def remove_autostart(self):
+        """Entfernt Autostart"""
+        autostart_file = Path.home() / ".config" / "autostart" / "guideos-conky-custom.desktop"
+        if autostart_file.exists():
+            autostart_file.unlink()
+
+    def disable_system_conky_autostart(self):
+        """Deaktiviert System-Conky Autostart falls vorhanden"""
+        system_autostart = Path.home() / ".config" / "autostart" / "conky.desktop"
+        if system_autostart.exists():
+            with open(system_autostart, 'r') as f:
+                content = f.read()
+
+            if "X-GNOME-Autostart-enabled=false" not in content:
+                content += "\nX-GNOME-Autostart-enabled=false\n"
+                with open(system_autostart, 'w') as f:
+                    f.write(content)
+
+class ConkyConfiguratorApp(Adw.Application):
+    """Hauptanwendung"""
+
+    def __init__(self):
+        super().__init__(
+            application_id="de.guideos.ConkyConfigurator",
+            flags=Gio.ApplicationFlags.DEFAULT_FLAGS
+        )
+
+    def do_activate(self):
+        # CSS für breitere ComboRow Popups laden
+        css_provider = Gtk.CssProvider()
+        css = """
+        popover.combo contents {
+            min-width: 400px;
+        }
+        """
+        css_provider.load_from_data(css.encode())
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(),
+            css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        win = self.props.active_window
+        if not win:
+            win = ConkyConfiguratorWindow(application=self)
+        win.present()
+
+def main():
+    app = ConkyConfiguratorApp()
+    return app.run(sys.argv)
+
+if __name__ == "__main__":
+    main()
