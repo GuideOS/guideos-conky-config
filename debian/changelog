@@ -1,3 +1,10 @@
+guideos-conky (2.0-1) unstable; urgency=medium
+
+  * Added link to /usr/bin
+  * Added dependence
+
+ -- KTT73 <ktt73@guideos.de>  Sun, 25 Jan 2026 09:59:09 +0100
+
 guideos-conky (2.0) unstable; urgency=medium
 
   * Added Configuration App

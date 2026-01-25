@@ -20,6 +20,7 @@ override_dh_install:
 	install -m 755 files/conky/guideos-conky-configurator debian/$(PACKAGE)/usr/lib/guideos-conky/
 	install -m 644 files/conky/GuideOS.lua debian/$(PACKAGE)/usr/lib/guideos-conky/
 	cp -r files/conky/images debian/$(PACKAGE)/usr/lib/guideos-conky/
+	ln -sf /usr/lib/guideos-conky/guideos-conky-configurator debian/$(PACKAGE)/usr/bin/guideos-conky-configurator
 
 	install -m 644 files/io.github.guideos.guideos_conky.metainfo.xml debian/$(PACKAGE)/usr/share/metainfo/
 	install -m 644 files/guideos-conky.desktop debian/$(PACKAGE)/usr/share/applications/

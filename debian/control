@@ -8,5 +8,5 @@ Homepage: https://guideos.de
 
 Package: guideos-conky
 Architecture: all
-Depends: ${misc:Depends}, bash, conky-all, wget, python3, psutils, python3-gi, libadwaita-1-0
+Depends: ${misc:Depends}, bash, conky-all, wget, python3, psutils, python3-gi, libadwaita-1-0, gir1.2-gtk-4.0, gir1.2-adw-1
 Description: The GuideOS Conky Configurator is a user-friendly graphical application that allows you to easily configure and customize your Conky system monitor without manually editing configuration files. It provides an intuitive interface to adjust appearance, positioning, system information display, and autostart settings.
