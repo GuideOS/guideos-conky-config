@@ -15,6 +15,8 @@ locale_path = os.path.join(os.path.dirname(__file__), 'locale')
 lang = gettext.translation('hwinfo', localedir=locale_path, languages=['de'], fallback=True)
 _ = lang.gettext
 
+os.environ["PATH"] = os.environ.get("PATH", "") + ":/sbin:/usr/sbin"
+
 def cpu_type():
     try:
         with open("/proc/cpuinfo") as f:
